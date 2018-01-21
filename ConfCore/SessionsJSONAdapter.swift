@@ -18,9 +18,17 @@ enum AssetKeys: String, JSONSubscriptType {
 }
 
 private enum SessionKeys: String, JSONSubscriptType {
-    case id, year, title, platforms, description, startTime, eventContentId, eventId, media, webPermalink, staticContentId
+    case id, year, title, platforms, description, startTime, eventContentId, eventId, media, webPermalink, staticContentId, related
 
     case track = "trackId"
+
+    var jsonKey: JSONKey {
+        return JSONKey.key(rawValue)
+    }
+}
+
+enum RelatedKeys: String, JSONSubscriptType {
+    case activities, resources
 
     var jsonKey: JSONKey {
         return JSONKey.key(rawValue)
@@ -33,6 +41,7 @@ final class SessionsJSONAdapter: Adapter {
     typealias OutputType = Session
 
     func adapt(_ input: JSON) -> Result<Session, AdapterError> {
+        // TODO: Why are we doing this? 🤔 Doesn't account for new "fall" sessions, and we'll need to give any related activity IDs the same treatment if they're to match?
         guard let id = input[SessionKeys.id].string?.replacingOccurrences(of: "wwdc", with: "") else {
             return .error(.missingKey(SessionKeys.id))
         }
@@ -114,6 +123,21 @@ final class SessionsJSONAdapter: Adapter {
             session.assets.append(slidesAsset)
         }
 
+        if let resourcesJSON = input[SessionKeys.related][RelatedKeys.resources].array {
+            if case .success(let resources) = RelatedResourcesJSONAdapter().adapt(resourcesJSON) {
+                session.related.append(contentsOf: resources)
+            }
+        }
+
+        if let activitiesJSON = input[SessionKeys.related][RelatedKeys.activities].array {
+            session.related.append(contentsOf: activitiesJSON.flatMap {
+                let resource = SessionResource()
+                resource.identifier = $0.string!
+                resource.type = .activity
+                return resource
+            })
+        }
+
         if let permalink = input[SessionKeys.webPermalink].string {
             let webPageAsset = SessionAsset()
             webPageAsset.rawAssetType = SessionAssetType.webpage.rawValue
@@ -132,10 +156,11 @@ final class SessionsJSONAdapter: Adapter {
         session.summary = summary
         session.trackIdentifier = "\(trackIdentifier)"
         session.mediaDuration = input[SessionKeys.media][AssetKeys.duration].doubleValue
-        
+
         session.eventIdentifier = eventIdentifier
-        
+
         return .success(session)
     }
-    
+
 }
+
