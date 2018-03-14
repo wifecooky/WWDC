@@ -196,23 +196,26 @@ final class AppCoordinator {
             tabController.hideLoading()
         }
 
+        setupSearch()
+
         storage.tracksObservable
             .take(1)
             .subscribe(onNext: { [weak self] tracks in
-                self?.videosController.listViewController.tracks = tracks
+                self?.videosController.listViewController.sessionRowProvider = VideosSessionRowProvider(tracks: tracks)
+                self?.searchCoordinator.applyVideosFilters()
             }).disposed(by: disposeBag)
 
-        storage.scheduleObservable
+        storage
+            .scheduleObservable
             .take(1)
             .subscribe(onNext: { [weak self] sections in
-                self?.scheduleController.listViewController.scheduleSections = sections
+                self?.scheduleController.listViewController.sessionRowProvider = ScheduleSessionRowProvider(scheduleSections: sections)
+                self?.searchCoordinator.applyScheduleFilters()
             }).disposed(by: disposeBag)
 
         liveObserver.start()
 
         restoreListStatesIfNeeded()
-
-        setupSearch()
     }
 
     private lazy var searchCoordinator: SearchCoordinator = {
@@ -297,22 +300,26 @@ final class AppCoordinator {
     }
 
     private func restoreListStatesIfNeeded() {
-        defer { didRestoreLists = true }
-
-        if let link = deferredLink {
-            return handle(link: link)
-        }
-
         guard !didRestoreLists else { return }
+        didRestoreLists = true
 
+        // We are skipping restoring the selection, but also we are only doing the scroll
+        // to today. This is currently resulting in the top of the list being selected but
+        // the list being scroll to an event that is "today". I feel like we could either restore
+        // the saved selection and scroll to today OR scroll to and select the first session of "today"
         if !scrollToToday() {
             if let identifier = Preferences.shared.selectedScheduleItemIdentifier {
-                scheduleController.listViewController.selectSession(with: identifier)
+                scheduleController.listViewController.selectSession(with: identifier, deferIfNeeded: true)
             }
         }
 
         if let identifier = Preferences.shared.selectedVideoItemIdentifier {
-            videosController.listViewController.selectSession(with: identifier)
+            videosController.listViewController.selectSession(with: identifier, deferIfNeeded: true)
+        }
+
+        // In the case of initialization, link handling will overwrite the deferred identifier from above
+        if let link = deferredLink {
+            return handle(link: link, deferIfNeeded: false)
         }
     }
 
@@ -326,19 +333,24 @@ final class AppCoordinator {
 
     // MARK: - Deep linking
 
-    func handle(link: DeepLink) {
-        guard didRestoreLists else {
+    func handle(link: DeepLink, deferIfNeeded: Bool) {
+
+        // If the app is launched by a deeplink, pass the link down to
+        // state restoration
+        guard didRestoreLists || !deferIfNeeded else {
             deferredLink = link
             return
         }
 
         if link.isForCurrentYear {
             tabController.activeTab = .schedule
-            scheduleController.listViewController.selectSession(with: link.sessionIdentifier)
+            scheduleController.listViewController.selectSession(with: link.sessionIdentifier, deferIfNeeded: true)
         } else {
             tabController.activeTab = .videos
-            videosController.listViewController.selectSession(with: link.sessionIdentifier)
+            videosController.listViewController.selectSession(with: link.sessionIdentifier, deferIfNeeded: true)
         }
+
+        deferredLink = nil
     }
 
     // MARK: - Preferences

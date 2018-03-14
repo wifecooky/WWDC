@@ -44,15 +44,9 @@ class SessionsTableViewController: NSViewController {
         }
     }
 
-    var tracks: Results<Track>? {
+    var sessionRowProvider: SessionRowProvider? {
         didSet {
-            updateVideosList()
-        }
-    }
-
-    var scheduleSections: Results<ScheduleSection>? {
-        didSet {
-            updateScheduleList()
+            updateAllSessionRows()
         }
     }
 
@@ -65,7 +59,19 @@ class SessionsTableViewController: NSViewController {
         return DispatchQueue(label: "io.wwdc.sessiontable.displayedrows.lock\(self.hashValue)", qos: .userInteractive)
     }()
 
+    var hasPerformedInitialRowDisplay = false
+
     func setDisplayedRows(_ newValue: [SessionRow], animated: Bool) {
+
+        if !hasPerformedInitialRowDisplay {
+            hasPerformedInitialRowDisplay = true
+            displayedRows = newValue
+            tableView.reloadData()
+            if let deferredSelection = deferredSelection {
+                selectSession(with: deferredSelection.identifier, scrollOnly: deferredSelection.scrollOnly)
+            }
+            return
+        }
 
         // Dismiss the menu when the displayed rows are about to change otherwise it will crash
         tableView.menu?.cancelTrackingWithoutAnimation()
@@ -167,7 +173,16 @@ class SessionsTableViewController: NSViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func selectSession(with identifier: String, scrollOnly: Bool = false) {
+    var deferredSelection: (identifier: String, scrollOnly: Bool)?
+
+    func selectSession(with identifier: String, scrollOnly: Bool = false, deferIfNeeded: Bool = false) {
+
+        // If we haven't yet displayed our rows, likely because we haven't come on screen
+        // yet. We defer scrolling to the requested identifier until that time.
+        guard hasPerformedInitialRowDisplay || !deferIfNeeded else {
+            deferredSelection = (identifier, scrollOnly)
+            return
+        }
         guard let index = displayedRows.index(where: { row in
             guard case .session(let viewModel) = row.kind else { return false }
 
@@ -184,13 +199,9 @@ class SessionsTableViewController: NSViewController {
     }
 
     func scrollToToday() {
-        guard let sections = scheduleSections else { return }
-
-        guard let section = sections.filter("representedDate >= %@", today()).first else { return }
-
-        guard let identifier = section.instances.first?.session?.identifier else { return }
-
-        selectSession(with: identifier, scrollOnly: true)
+        if let identifier = sessionRowProvider?.sessionRowIdentifierForToday() {
+            selectSession(with: identifier, scrollOnly: true)
+        }
     }
 
     override func viewDidAppear() {
@@ -203,96 +214,29 @@ class SessionsTableViewController: NSViewController {
         searchController.searchField.isEnabled = true
     }
 
-    /// Variable used to track whether the initial display of rows has occurred
-    /// - warning: Not meant to be used outside of `performFirstUpdateIfNeeded`
-    private var setupDone = false
-
     /// This function is meant to ensure the table view gets populated
     /// even if its data model gets added while it is offscreen. Specifically,
     /// when this table view is not the initial active tab.
     private func performFirstUpdateIfNeeded() {
-        guard !setupDone else { return }
-        setupDone = true
+        guard !hasPerformedInitialRowDisplay else { return }
 
-        switch style {
-        case .schedule:
-            updateScheduleList()
-        case .videos:
-            updateVideosList()
-        }
+        updateWithSearchResults()
     }
 
-    private func updateVideosList() {
-        guard searchResults == nil else { return }
-        guard view.window != nil else { return }
-
-        guard let tracks = tracks else { return }
-
-        let rows: [SessionRow] = tracks.flatMap { track -> [SessionRow] in
-            let titleRow = SessionRow(title: track.name)
-
-            let sessionRows: [SessionRow] = track.sessions.filter(Session.videoPredicate).sorted(by: Session.standardSort).flatMap { session in
-                guard let viewModel = SessionViewModel(session: session) else { return nil }
-
-                return SessionRow(viewModel: viewModel)
-            }
-
-            return [titleRow] + sessionRows
-        }
-
-        allRows = rows
-
-        setDisplayedRows(allRows, animated: false)
-    }
-
-    private func updateScheduleList() {
-        guard searchResults == nil else { return }
-        guard let sections = scheduleSections else { return }
-
-        var shownTimeZone = false
-
-        let rows: [SessionRow] = sections.flatMap { section -> [SessionRow] in
-            let titleRow = SessionRow(date: section.representedDate, showTimeZone: !shownTimeZone)
-
-            shownTimeZone = true
-
-            let instanceRows: [SessionRow] = section.instances.sorted(by: SessionInstance.standardSort).flatMap { instance in
-                guard let viewModel = SessionViewModel(session: instance.session, instance: instance, style: .schedule) else { return nil }
-
-                return SessionRow(viewModel: viewModel)
-            }
-
-            return [titleRow] + instanceRows
-        }
-
-        allRows = rows
-
-        setDisplayedRows(allRows, animated: false)
+    private func updateAllSessionRows() {
+        allRows = sessionRowProvider?.sessionRows() ?? []
     }
 
     private func updateWithSearchResults() {
+        guard view.window != nil else { return }
+
         guard let results = searchResults else {
+
             if !allRows.isEmpty {
                 setDisplayedRows(allRows, animated: true)
-            } else {
-                switch style {
-                case .schedule:
-                    updateScheduleList()
-                case .videos:
-                    updateVideosList()
-                }
             }
 
             return
-        }
-
-        if allRows.isEmpty {
-            switch style {
-            case .schedule:
-                updateScheduleList()
-            case .videos:
-                updateVideosList()
-            }
         }
 
         let sortingFunction = (style == .schedule) ? Session.standardSortForSchedule : Session.standardSort

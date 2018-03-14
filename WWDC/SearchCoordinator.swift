@@ -131,11 +131,6 @@ final class SearchCoordinator {
 
         if !scheduleSearchController.filters.isIdentical(to: scheduleSearchFilters) {
             scheduleSearchController.filters = scheduleSearchFilters
-
-            let activeScheduleFilters = scheduleSearchFilters.filter { !$0.isEmpty }
-            if activeScheduleFilters.count > 0 {
-                updateSearchResults(for: scheduleController, with: activeScheduleFilters)
-            }
         }
 
         // Videos Filter Configuration
@@ -179,11 +174,6 @@ final class SearchCoordinator {
 
         if !videosSearchController.filters.isIdentical(to: videosSearchFilters) {
             videosSearchController.filters = videosSearchFilters
-
-            let activeVideosFilters = videosSearchFilters.filter { !$0.isEmpty }
-            if activeVideosFilters.count > 0 {
-                updateSearchResults(for: videosController, with: activeVideosFilters)
-            }
         }
 
         // set delegates
@@ -191,12 +181,20 @@ final class SearchCoordinator {
         videosSearchController.delegate = self
     }
 
+    func applyScheduleFilters(completion: (() -> Void)? = nil) {
+        updateSearchResults(for: scheduleController, with: scheduleSearchController.filters, completion: completion)
+    }
+
+    func applyVideosFilters(completion: (() -> Void)? = nil) {
+        updateSearchResults(for: videosController, with: videosSearchController.filters, completion: completion)
+    }
+
     fileprivate lazy var searchQueue: DispatchQueue = DispatchQueue(label: "Search", qos: .userInteractive)
 
-    fileprivate func updateSearchResults(for controller: SessionsTableViewController, with filters: [FilterType]) {
+    fileprivate func updateSearchResults(for controller: SessionsTableViewController, with filters: [FilterType], completion: (() -> Void)? = nil) {
         guard filters.contains(where: { !$0.isEmpty }) else {
             controller.searchResults = nil
-
+            completion?()
             return
         }
 
@@ -232,6 +230,7 @@ final class SearchCoordinator {
                 DispatchQueue.main.async {
                     let searchResults = self.storage.realm.objects(Session.self).filter("identifier IN %@", keys)
                     controller.searchResults = searchResults
+                    completion?()
                 }
             } catch {
                 LoggingHelper.registerError(error, info: ["when": "Searching"])
